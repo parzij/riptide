@@ -9,9 +9,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/atotto/clipboard"
-	"github.com/Foxemsx/riptide/internal/db"
-	"github.com/Foxemsx/riptide/internal/engine"
-	apptheme "github.com/Foxemsx/riptide/internal/theme"
+	"github.com/parzij/riptide/internal/db"
+	"github.com/parzij/riptide/internal/engine"
+	apptheme "github.com/parzij/riptide/internal/theme"
 )
 
 // model is the bubbletea sub-model for the one-shot Speed Test card.

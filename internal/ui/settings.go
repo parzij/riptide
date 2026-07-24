@@ -8,8 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Foxemsx/riptide/internal/db"
-	apptheme "github.com/Foxemsx/riptide/internal/theme"
+	"github.com/parzij/riptide/internal/db"
+	apptheme "github.com/parzij/riptide/internal/theme"
 )
 
 type settingsFocus int
@@ -23,7 +23,7 @@ const (
 )
 
 const (
-	aboutGitHubURL = "https://github.com/Foxemsx/riptide"
+	aboutGitHubURL = "https://github.com/parzij/riptide"
 	aboutBMCURL    = "https://buymeacoffee.com/foxemsx"
 )
 

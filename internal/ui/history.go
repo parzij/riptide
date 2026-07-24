@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Foxemsx/riptide/internal/db"
-	apptheme "github.com/Foxemsx/riptide/internal/theme"
+	"github.com/parzij/riptide/internal/db"
+	apptheme "github.com/parzij/riptide/internal/theme"
 )
 
 // historyLimit is how many recent runs we always show.

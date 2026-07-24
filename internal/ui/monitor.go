@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/Foxemsx/riptide/internal/engine"
-	apptheme "github.com/Foxemsx/riptide/internal/theme"
+	"github.com/parzij/riptide/internal/engine"
+	apptheme "github.com/parzij/riptide/internal/theme"
 )
 
 // appsSideMinWidth: terminal must be at least this wide to place the apps

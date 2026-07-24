@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # riptide installer. Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Foxemsx/riptide/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/parzij/riptide/main/install.sh | sh
 #   bash install.sh
 
 # Re-exec under bash. `curl | sh` sets $0 to the sh binary itself, so re-exec
@@ -265,7 +265,7 @@ func initialModel() model {
 	return model{
 		phase: "intro",
 		steps: []step{
-			{name: "Installing riptide binary (go install)", args: []string{"go", "install", "github.com/Foxemsx/riptide/cmd/riptide@main"}},
+			{name: "Installing riptide binary (go install)", args: []string{"go", "install", "github.com/parzij/riptide/cmd/riptide@main"}},
 			{name: "Verifying riptide is on your PATH", args: []string{"sh", "-c", "command -v riptide"}},
 		},
 	}

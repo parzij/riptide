@@ -9,9 +9,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Foxemsx/riptide/internal/db"
-	"github.com/Foxemsx/riptide/internal/theme"
-	"github.com/Foxemsx/riptide/internal/ui"
+	"github.com/parzij/riptide/internal/db"
+	"github.com/parzij/riptide/internal/theme"
+	"github.com/parzij/riptide/internal/ui"
 )
 
 var version = "dev"

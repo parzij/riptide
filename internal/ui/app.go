@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Foxemsx/riptide/internal/db"
-	apptheme "github.com/Foxemsx/riptide/internal/theme"
+	"github.com/parzij/riptide/internal/db"
+	apptheme "github.com/parzij/riptide/internal/theme"
 )
 
 // App is the top-level Bubble Tea model and the screen router.

@@ -54,7 +54,7 @@ dist: clean
 		out=$(DIST)/riptide-$$os-$$arch; \
 		echo ">> building $$os/$$arch"; \
 		GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" -o "$$out/$$bin" $(PKG) || exit 1; \
-		cp LICENSE README.md "$$out/" 2>/dev/null || true; \
+		cp LICENSE README.md THIRD_PARTY_NOTICES.md "$$out/" 2>/dev/null || true; \
 		if [ "$$os" = "windows" ]; then \
 			(cd $(DIST) && zip -rq riptide-$$os-$$arch.zip riptide-$$os-$$arch); \
 		else \

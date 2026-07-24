@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	apptheme "github.com/Foxemsx/riptide/internal/theme"
-	"github.com/Foxemsx/riptide/internal/update"
+	apptheme "github.com/parzij/riptide/internal/theme"
+	"github.com/parzij/riptide/internal/update"
 )
 
 // Layout thresholds for a responsive menu.
@@ -600,13 +600,13 @@ func (m *menuModel) renderUpdateChip() string {
 		spin := m.spinner.View()
 		title = spin + " Checking for updates"
 		sub = "v" + strings.TrimPrefix(m.version, "v")
-		linkLabel = "github.com/Foxemsx/riptide"
+		linkLabel = "github.com/parzij/riptide"
 	case updateFailed:
 		titleStyle = lipgloss.NewStyle().
 			Foreground(m.theme.Muted).Background(bg).Bold(true)
 		title = "· Offline"
 		sub = "v" + strings.TrimPrefix(m.version, "v")
-		linkLabel = "github.com/Foxemsx/riptide"
+		linkLabel = "github.com/parzij/riptide"
 		url = update.RepoURL
 	default:
 		if m.updateRes.UpdateAvailable {
@@ -629,7 +629,7 @@ func (m *menuModel) renderUpdateChip() string {
 			if m.updateRes.Latest != "" {
 				sub = displayVer(m.updateRes.Latest)
 			}
-			linkLabel = "github.com/Foxemsx/riptide"
+			linkLabel = "github.com/parzij/riptide"
 			border = m.theme.AccentHL
 			if m.chipHover {
 				border = m.theme.AccentDL

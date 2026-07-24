@@ -2,53 +2,25 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"math/rand"
-	"net/http"
+	"math"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// --- Configuration -------------------------------------------------------
-
 const (
-	// fast.com config endpoint. The token is the public app token shipped in
-	// fast.com's web bundle; it is required by the API and is not secret.
-	configURL = "https://api.fast.com/netflix/speedtest/v2?https=true&token=YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm&urlCount=%d"
-
-	// DefaultConnections is the number of parallel streams used to saturate the link.
+	// DefaultConnections is the number of parallel streams used by the
+	// Speedtest.net backend to saturate the link.
 	DefaultConnections = 5
 	// DefaultDuration is how long each transfer phase (download / upload) runs.
 	DefaultDuration = 10 * time.Second
-	// Size of a single upload POST body. We reuse the same random buffer
-	// repeatedly, mirroring fast.com's POST-to-target approach.
-	uploadChunkSize = 256 * 1024
+
+	sampleInterval = 100 * time.Millisecond
+	connectedPause = 900 * time.Millisecond
+	latencyTimeout = 8 * time.Second
 )
-
-// --- Data structures -----------------------------------------------------
-
-type target struct {
-	URL  string `json:"url"`
-	Name string `json:"name"`
-}
-
-type configResponse struct {
-	Client  clientInfo `json:"client"`
-	Targets []target   `json:"targets"`
-}
-
-type clientInfo struct {
-	IP       string `json:"ip"`
-	ASN      string `json:"asn"`
-	Location struct {
-		City    string `json:"city"`
-		Country string `json:"country"`
-	} `json:"location"`
-}
 
 // Sample is one instantaneous speed measurement broadcast to the UI each tick.
 type Sample struct {
@@ -110,268 +82,34 @@ type Result struct {
 	Client       string // human-readable location/ISP if known
 }
 
-// --- Target discovery ----------------------------------------------------
-
-func fetchTargets(connections int) ([]string, []string, string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(fmt.Sprintf(configURL, connections))
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("could not reach speed-test servers: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, "", fmt.Errorf("speed-test server returned status %d", resp.StatusCode)
-	}
-	var cr configResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return nil, nil, "", fmt.Errorf("could not parse server list: %w", err)
-	}
-	if len(cr.Targets) == 0 {
-		return nil, nil, "", fmt.Errorf("no speed-test servers were found")
-	}
-	urls := make([]string, len(cr.Targets))
-	names := make([]string, len(cr.Targets))
-	for i, t := range cr.Targets {
-		urls[i] = t.URL
-		names[i] = t.Name
-	}
-	// Build a friendly region label from the client location.
-	loc := cr.Client.Location
-	region := strings.TrimSpace(loc.City)
-	if loc.Country != "" {
-		if region != "" {
-			region += ", "
-		}
-		region += loc.Country
-	}
-	return urls, names, region, nil
+// speedBackend isolates the TUI-facing engine from the concrete provider.
+// The production implementation uses Speedtest.net through speedtest-go;
+// tests use a deterministic in-memory backend.
+type speedBackend interface {
+	FindServer(context.Context) (speedServer, error)
+	SetDownloadCallback(func(rateBytesPerSec float64, totalBytes uint64))
+	SetUploadCallback(func(rateBytesPerSec float64, totalBytes uint64))
+	TotalDownload() uint64
+	TotalUpload() uint64
 }
 
-// --- Transfer engine -----------------------------------------------------
-
-// counter is an atomic byte counter shared across parallel connections.
-type counter struct {
-	n uint64
+type speedServer interface {
+	TargetURL() string
+	DisplayName() string
+	Download(context.Context) error
+	Upload(context.Context) error
+	Ping(context.Context) (time.Duration, error)
+	DownloadMbps() float64
+	UploadMbps() float64
 }
 
-func (c *counter) add(b int)     { atomic.AddUint64(&c.n, uint64(b)) }
-func (c *counter) value() uint64 { return atomic.LoadUint64(&c.n) }
-
-// runPhase opens `conn` parallel connections to the given URLs and streams
-// data for `duration`, counting bytes into `c`. It returns when the duration
-// elapses or the context is cancelled. After a short settle delay it stops
-// opening new connections so in-flight transfers finish cleanly.
-func runPhase(ctx context.Context, urls []string, duration time.Duration, c *counter, doPost bool) {
-	if len(urls) == 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(ctx, duration)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	// Distribute connections round-robin across the discovered URLs.
-	for i := 0; i < DefaultConnections; i++ {
-		url := urls[i%len(urls)]
-		wg.Add(1)
-		go func(url string) {
-			defer wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				if doPost {
-					postOnce(ctx, url, c)
-				} else {
-					getOnce(ctx, url, c)
-				}
-			}
-		}(url)
-	}
-	wg.Wait()
-}
-
-// httpClient is used for transfers. It inherits ctx cancellation (via
-// NewRequestWithContext) and has a request timeout so a stalled connection
-// cannot hang wg.Wait() past the phase duration.
-var httpClient = &http.Client{Timeout: 15 * time.Second}
-
-func getOnce(ctx context.Context, url string, c *counter) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return
-	}
-	// Wait for the connection to either succeed or be cancelled.
-	type respErr struct {
-		resp *http.Response
-		err  error
-	}
-	ch := make(chan respErr, 1)
-	go func() {
-		resp, e := httpClient.Do(req)
-		ch <- respErr{resp, e}
-	}()
-	select {
-	case <-ctx.Done():
-		return
-	case re := <-ch:
-		if re.err != nil || re.resp == nil {
-			return
-		}
-		resp := re.resp
-		defer resp.Body.Close()
-		buf := make([]byte, 32*1024)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			n, err := resp.Body.Read(buf)
-			if n > 0 {
-				c.add(n)
-			}
-			if err != nil {
-				return
-			}
-		}
-	}
-}
-
-func postOnce(ctx context.Context, url string, c *counter) {
-	body := make([]byte, uploadChunkSize)
-	rand.Read(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, io.NopCloser(newBytesReader(body)))
-	if err != nil {
-		return
-	}
-	req.ContentLength = int64(len(body))
-	req.Header.Set("Content-Type", "application/octet-stream")
-	ch := make(chan error, 1)
-	go func() {
-		resp, e := httpClient.Do(req)
-		if e != nil {
-			ch <- e
-			return
-		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		ch <- nil
-	}()
-	select {
-	case <-ctx.Done():
-		return
-	case e := <-ch:
-		if e != nil {
-			return
-		}
-	}
-	c.add(len(body))
-}
-
-// bytesReader is a small helper so we can reuse a single buffer as the POST
-// body while still counting each send.
-type bytesReader struct {
-	b   []byte
-	pos int
-}
-
-func newBytesReader(b []byte) *bytesReader { return &bytesReader{b: b} }
-
-func (r *bytesReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.pos:])
-	r.pos += n
-	return n, nil
-}
-
-// --- Latency probe -------------------------------------------------------
-
-// measureLatency probes RTT to a target. It must NOT download the speed-test
-// payload (those URLs stream huge bodies) — we only wait for response headers,
-// then close. Several samples are taken and the median is returned.
-func measureLatency(ctx context.Context, url string) (float64, error) {
-	if url == "" {
-		return 0, fmt.Errorf("no target for latency probe")
-	}
-
-	// Short per-probe timeout so a hung target cannot stall the whole test.
-	client := &http.Client{Timeout: 4 * time.Second}
-
-	probe := func() (float64, error) {
-		pctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		defer cancel()
-
-		// Prefer HEAD (no body). Some CDNs reject it — fall back to a ranged GET.
-		req, err := http.NewRequestWithContext(pctx, http.MethodHead, url, nil)
-		if err != nil {
-			return 0, err
-		}
-		start := time.Now()
-		resp, err := client.Do(req)
-		if err != nil || (resp != nil && (resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotImplemented)) {
-			if resp != nil && resp.Body != nil {
-				resp.Body.Close()
-			}
-			req, err = http.NewRequestWithContext(pctx, http.MethodGet, url, nil)
-			if err != nil {
-				return 0, err
-			}
-			// Ask for a single byte so the server can stop early when supported.
-			req.Header.Set("Range", "bytes=0-0")
-			start = time.Now()
-			resp, err = client.Do(req)
-			if err != nil {
-				return 0, err
-			}
-		}
-		// Headers arrived = useful RTT signal. Never drain the body (that is
-		// what made "measuring latency" look like another full download).
-		ms := float64(time.Since(start).Microseconds()) / 1000.0
-		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
-		}
-		return ms, nil
-	}
-
-	// Warm-up (discarded) + a few samples; median resists one slow outlier.
-	if _, err := probe(); err != nil && ctx.Err() != nil {
-		return 0, err
-	}
-	samples := make([]float64, 0, 3)
-	for i := 0; i < 3; i++ {
-		if ctx.Err() != nil {
-			break
-		}
-		ms, err := probe()
-		if err != nil {
-			continue
-		}
-		if ms > 0 {
-			samples = append(samples, ms)
-		}
-	}
-	if len(samples) == 0 {
-		return 0, fmt.Errorf("latency probe failed")
-	}
-	// Insertion-sort tiny slice, pick median.
-	for i := 1; i < len(samples); i++ {
-		for j := i; j > 0 && samples[j] < samples[j-1]; j-- {
-			samples[j], samples[j-1] = samples[j-1], samples[j]
-		}
-	}
-	return samples[len(samples)/2], nil
-}
-
-// --- Orchestration -------------------------------------------------------
-
-// Run executes the full test: discover targets, download, upload, latency.
-// It streams Phase transitions on p.Phases, Samples on p.Samples, and a final
-// Result on p.Result. Always emits a Result (best-effort partials on cancel).
+// Run executes the full test: discover a Speedtest.net server, download,
+// upload, then measure latency. The public contract deliberately remains the
+// same as the original Fast.com engine so the Bubble Tea UI needs no changes.
 func Run(ctx context.Context, p *Progress, connections int, duration time.Duration) {
+	if p == nil {
+		return
+	}
 	if connections <= 0 {
 		connections = DefaultConnections
 	}
@@ -379,177 +117,266 @@ func Run(ctx context.Context, p *Progress, connections int, duration time.Durati
 		duration = DefaultDuration
 	}
 
-	var (
-		dlBytes, ulBytes uint64
-		dlPeak, ulPeak   float64
-		ping             float64
+	runSpeedTest(
+		ctx,
+		p,
+		duration,
+		connectedPause,
+		newSpeedtestBackend(connections, duration),
 	)
-	// Ensure the UI always gets a final Result, even on cancel/error mid-run.
+}
+
+func runSpeedTest(
+	ctx context.Context,
+	p *Progress,
+	duration time.Duration,
+	pause time.Duration,
+	backend speedBackend,
+) {
+	var measurements measurementState
+
+	// Preserve the old engine's best-effort contract: even a cancelled or
+	// partially failed run emits PhaseDone and one final Result.
 	defer func() {
 		sendPhase(p, PhaseDone)
 		select {
-		case p.Result <- Result{
-			DownloadMbps: bytesToMbps(dlBytes, duration),
-			UploadMbps:   bytesToMbps(ulBytes, duration),
-			PingMs:       ping,
-			DownloadPeak: dlPeak,
-			UploadPeak:   ulPeak,
-		}:
+		case p.Result <- measurements.snapshot():
 		default:
 		}
 	}()
 
-	// Phase: finding servers.
 	sendPhase(p, PhaseFinding)
-	urls, names, region, err := fetchTargets(connections)
+	server, err := backend.FindServer(ctx)
 	if err != nil {
-		p.Err = err
+		setProgressError(ctx, p, "could not find a Speedtest.net server", err)
 		return
 	}
-	p.URLs = urls
-	if region != "" {
-		p.ServerName = region
-	} else if len(names) > 0 {
-		p.ServerName = names[0]
-	}
 
-	// Phase: connected — hold a brief, explicit beat so the transition from
-	// "finding servers" to live numbers reads as deliberate, not instant.
+	if target := strings.TrimSpace(server.TargetURL()); target != "" {
+		p.URLs = []string{target}
+	}
+	p.ServerName = strings.TrimSpace(server.DisplayName())
+
+	backend.SetDownloadCallback(func(rate float64, total uint64) {
+		rate = validRate(rate)
+		measurements.record(PhaseDownload, rate)
+		sendSample(p, Sample{
+			Phase: PhaseDownload,
+			Bytes: total,
+			Rate:  rate,
+			At:    time.Now(),
+		})
+	})
+	backend.SetUploadCallback(func(rate float64, total uint64) {
+		rate = validRate(rate)
+		measurements.record(PhaseUpload, rate)
+		sendSample(p, Sample{
+			Phase: PhaseUpload,
+			Bytes: total,
+			Rate:  rate,
+			At:    time.Now(),
+		})
+	})
+
 	sendPhase(p, PhaseConnected)
-	select {
-	case <-time.After(900 * time.Millisecond):
-	case <-ctx.Done():
+	if !waitFor(ctx, pause) {
 		return
 	}
 
-	// Phase: download.
 	sendPhase(p, PhaseDownload)
-	dlCounter := &counter{}
-	dlPeak = runTimedPhase(ctx, urls, duration, dlCounter, false, p, PhaseDownload)
-	dlBytes = dlCounter.value()
+	started := time.Now()
+	if err := server.Download(ctx); err != nil {
+		setProgressError(ctx, p, "download test failed", err)
+		return
+	}
+	downloadBytes := backend.TotalDownload()
+	downloadMbps := resultMbps(server.DownloadMbps(), downloadBytes, time.Since(started), duration)
+	if downloadMbps <= 0 && downloadBytes == 0 {
+		setProgressError(ctx, p, "download test failed", errors.New("server transferred no data"))
+		return
+	}
+	measurements.finishDownload(downloadMbps)
 	if ctx.Err() != nil {
 		return
 	}
 
-	// Phase: upload.
 	sendPhase(p, PhaseUpload)
-	ulCounter := &counter{}
-	ulPeak = runTimedPhase(ctx, urls, duration, ulCounter, true, p, PhaseUpload)
-	ulBytes = ulCounter.value()
+	started = time.Now()
+	if err := server.Upload(ctx); err != nil {
+		setProgressError(ctx, p, "upload test failed", err)
+		return
+	}
+	uploadBytes := backend.TotalUpload()
+	uploadMbps := resultMbps(server.UploadMbps(), uploadBytes, time.Since(started), duration)
+	if uploadMbps <= 0 && uploadBytes == 0 {
+		setProgressError(ctx, p, "upload test failed", errors.New("server transferred no data"))
+		return
+	}
+	measurements.finishUpload(uploadMbps)
 	if ctx.Err() != nil {
 		return
 	}
 
-	// Phase: latency (headers-only RTT — must stay fast).
 	sendPhase(p, PhaseLatency)
-	if ms, err := measureLatency(ctx, urls[0]); err == nil {
-		ping = ms
+	pingCtx, cancelPing := context.WithTimeout(ctx, latencyTimeout)
+	latency, err := server.Ping(pingCtx)
+	cancelPing()
+	if err != nil {
+		setProgressError(ctx, p, "latency test failed", err)
+		return
+	}
+	measurements.finishPing(latency)
+}
+
+// measurementState is written by speedtest-go's sampling goroutine while Run
+// reads final values. The mutex keeps race-enabled tests and real restarts safe.
+type measurementState struct {
+	mu     sync.Mutex
+	result Result
+}
+
+func (m *measurementState) record(phase Phase, rateBytesPerSec float64) {
+	mbps := BytesPerSecToMbps(rateBytesPerSec)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch phase {
+	case PhaseDownload:
+		if mbps > m.result.DownloadPeak {
+			m.result.DownloadPeak = mbps
+		}
+	case PhaseUpload:
+		if mbps > m.result.UploadPeak {
+			m.result.UploadPeak = mbps
+		}
 	}
 }
 
-// momentarily not draining (or the buffer is full) we drop the message rather
-// than block the engine — the model's phase watchdog covers any missed
-// transition, so the UI can never stall on a blocked send here.
-func sendPhase(p *Progress, ph Phase) {
+func (m *measurementState) finishDownload(mbps float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.result.DownloadMbps = validMbps(mbps)
+	if m.result.DownloadPeak < m.result.DownloadMbps {
+		m.result.DownloadPeak = m.result.DownloadMbps
+	}
+}
+
+func (m *measurementState) finishUpload(mbps float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.result.UploadMbps = validMbps(mbps)
+	if m.result.UploadPeak < m.result.UploadMbps {
+		m.result.UploadPeak = m.result.UploadMbps
+	}
+}
+
+func (m *measurementState) finishPing(latency time.Duration) {
+	ms := float64(latency.Microseconds()) / 1000
+	if ms < 0 || math.IsNaN(ms) || math.IsInf(ms, 0) {
+		ms = 0
+	}
+	m.mu.Lock()
+	m.result.PingMs = ms
+	m.mu.Unlock()
+}
+
+func (m *measurementState) snapshot() Result {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.result
+}
+
+func resultMbps(reported float64, bytes uint64, elapsed, configured time.Duration) float64 {
+	if mbps := validMbps(reported); mbps > 0 {
+		return mbps
+	}
+
+	// speedtest-go normally supplies an EWMA result. If a provider returns no
+	// final value after moving data, retain a useful best-effort average.
+	if elapsed <= 0 {
+		elapsed = configured
+	}
+	return bytesToMbps(bytes, elapsed)
+}
+
+func validRate(rate float64) float64 {
+	if rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return 0
+	}
+	return rate
+}
+
+func validMbps(mbps float64) float64 {
+	if mbps < 0 || math.IsNaN(mbps) || math.IsInf(mbps, 0) {
+		return 0
+	}
+	return mbps
+}
+
+func setProgressError(ctx context.Context, p *Progress, label string, err error) {
+	if err == nil || ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	p.Err = fmt.Errorf("%s: %w", label, err)
+}
+
+func waitFor(ctx context.Context, duration time.Duration) bool {
+	if duration <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
 	select {
-	case p.Phases <- ph:
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func serverDisplayName(name, country string) string {
+	name = strings.TrimSpace(name)
+	country = strings.TrimSpace(country)
+	switch {
+	case name != "" && country != "":
+		return name + ", " + country
+	case name != "":
+		return name
+	default:
+		return country
+	}
+}
+
+// sendPhase is deliberately non-blocking. If the UI is momentarily not
+// draining (or its buffer is full), a later transition still keeps the engine
+// from stalling.
+func sendPhase(p *Progress, phase Phase) {
+	select {
+	case p.Phases <- phase:
 	default:
 	}
 }
 
 // sendSample delivers one instantaneous speed sample to the live UI bridge.
-// Like sendPhase it is non-blocking: if the model is momentarily not draining
-// the channel we drop the sample rather than stall the engine (the next tick
-// covers it).
-func sendSample(p *Progress, s Sample) bool {
+func sendSample(p *Progress, sample Sample) bool {
 	select {
-	case p.Samples <- s:
+	case p.Samples <- sample:
 		return true
 	default:
 		return false
 	}
 }
 
-// runTimedPhase opens parallel connections for `duration`, counting bytes into
-// c. Samples are forwarded to p.Samples (for live UI) AND collected locally to
-// compute the peak rate. The sampler is stopped via a child context before the
-// local channel is drained and closed, avoiding a send-on-closed-channel race.
-func runTimedPhase(ctx context.Context, urls []string, duration time.Duration, c *counter, doPost bool, p *Progress, ph Phase) float64 {
-	local := make(chan Sample, 128)
-	sctx, cancel := context.WithCancel(ctx)
-	peakDone := make(chan float64, 1)
-	go func() {
-		var peak float64
-		for s := range local {
-			if mbps := BytesPerSecToMbps(s.Rate); mbps > peak {
-				peak = mbps
-			}
-		}
-		peakDone <- peak
-	}()
-	go sampleLoop(sctx, c, local, p.Samples, ph)
-	runPhase(ctx, urls, duration, c, doPost)
-	cancel() // stop the sampler goroutine
-
-	select {
-	case peak := <-peakDone:
-		return peak
-	case <-time.After(duration + 5*time.Second):
+func bytesToMbps(bytes uint64, duration time.Duration) float64 {
+	if duration <= 0 {
 		return 0
 	}
-}
-
-// sampleLoop periodically snapshots the counter and emits a Sample tagged with
-// the active phase. Each sample is sent to both out (local peak math) and
-// live (the UI bridge); both sends respect ctx cancellation.
-func sampleLoop(ctx context.Context, c *counter, out chan<- Sample, live chan<- Sample, ph Phase) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	defer close(out)
-	var last uint64
-	var lastT = time.Now()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			now := time.Now()
-			cur := c.value()
-			dt := now.Sub(lastT).Seconds()
-			var rate float64
-			if dt > 0 {
-				rate = float64(cur-last) / dt
-			}
-			last, lastT = cur, now
-			s := Sample{Phase: ph, Bytes: cur, Rate: rate, At: now}
-			// Forward to the local collector (peak math) and the live UI
-			// bridge. Either send may be blocked/closed; ctx cancellation
-			// takes priority so we never leak.
-			select {
-			case out <- s:
-			case <-ctx.Done():
-				return
-			}
-			select {
-			case live <- s:
-			default:
-			}
-		}
-	}
-}
-
-// --- Unit helpers --------------------------------------------------------
-
-func bytesToMbps(bytes uint64, d time.Duration) float64 {
-	if d <= 0 {
-		return 0
-	}
-	return BytesPerSecToMbps(float64(bytes) / d.Seconds())
+	return BytesPerSecToMbps(float64(bytes) / duration.Seconds())
 }
 
 // BytesPerSecToMbps converts a raw byte/sec rate into megabits per second.
-func BytesPerSecToMbps(bps float64) float64 {
+func BytesPerSecToMbps(bytesPerSec float64) float64 {
 	const bitsPerByte = 8
 	const mega = 1_000_000
-	return (bps * bitsPerByte) / mega
+	return (bytesPerSec * bitsPerByte) / mega
 }

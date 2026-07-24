@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # riptide uninstaller. Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Foxemsx/riptide/main/uninstall.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/parzij/riptide/main/uninstall.sh | sh
 #   bash uninstall.sh
 
 # Re-exec under bash. `curl | sh` sets $0 to the sh binary itself, so re-exec

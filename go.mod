@@ -1,4 +1,4 @@
-module github.com/Foxemsx/riptide
+module github.com/parzij/riptide
 
 go 1.25.0
 
@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.1.0
 	github.com/charmbracelet/lipgloss v0.13.0
 	github.com/lucasb-eyer/go-colorful v1.2.0
+	github.com/showwin/speedtest-go v1.7.10
 	golang.org/x/sys v0.44.0
 	modernc.org/sqlite v1.34.5
 )

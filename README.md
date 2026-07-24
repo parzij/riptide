@@ -4,12 +4,17 @@
 
 A polished Go TUI with a startup menu, one-shot speed tests, a live bandwidth monitor, themes, and saved test history. Centered cards, smooth graphs, SQLite under the hood.
 
-[![terminal](https://img.shields.io/badge/terminal-TUI-39d0d8?style=flat-square)](https://github.com/Foxemsx/riptide)
+[![terminal](https://img.shields.io/badge/terminal-TUI-39d0d8?style=flat-square)](https://github.com/parzij/riptide)
 [![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev)
-[![Linux](https://img.shields.io/badge/Linux-supported-2ea44f?style=flat-square&logo=linux&logoColor=white)](https://github.com/Foxemsx/riptide)
-[![macOS](https://img.shields.io/badge/macOS-supported-A2AAAD?style=flat-square&logo=apple&logoColor=white)](https://github.com/Foxemsx/riptide)
-[![Windows](https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white)](https://github.com/Foxemsx/riptide)
+[![Linux](https://img.shields.io/badge/Linux-supported-2ea44f?style=flat-square&logo=linux&logoColor=white)](https://github.com/parzij/riptide)
+[![macOS](https://img.shields.io/badge/macOS-supported-A2AAAD?style=flat-square&logo=apple&logoColor=white)](https://github.com/parzij/riptide)
+[![Windows](https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white)](https://github.com/parzij/riptide)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+
+> This is a downstream fork of
+> [`Foxemsx/riptide`](https://github.com/Foxemsx/riptide). It retains the
+> original TUI and bandwidth monitor while replacing the Fast.com/Netflix
+> one-shot engine with a Speedtest.net-compatible backend.
 
 <p align="center">
   <img src="assets/showcase.gif?v=3" alt="riptide demo" width="720">
@@ -21,9 +26,19 @@ A polished Go TUI with a startup menu, one-shot speed tests, a live bandwidth mo
 
 | | |
 |:---|:---|
-| **Speed Test** | One-shot download, upload, and ping. Parallel connections, peak rates, timed phases. Auto-saves runs; average + "Good for" insight; compare the latest 10. |
+| **Speed Test** | One-shot download, upload, and ping through Speedtest.net-compatible servers. Parallel connections, peak rates, timed phases. Auto-saves runs; average + "Good for" insight; compare the latest 10. |
 | **Bandwidth Monitor** | Live view of *real* PC traffic (OS counters only — no test load). Peaks, uptime, pause, and an Apps panel showing what's using bandwidth now. |
 | **Settings** | Searchable settings: 20 color themes, About & Support, database reset, uninstall instructions. |
+
+---
+
+## Speed-test provider
+
+The one-shot test uses
+[`showwin/speedtest-go`](https://github.com/showwin/speedtest-go), an
+independent MIT-licensed Go client for Speedtest.net-compatible servers. The
+Bandwidth Monitor is unchanged: it only reads operating-system network
+counters and does not contact a speed-test provider.
 
 ---
 
@@ -96,14 +111,14 @@ A polished Go TUI with a startup menu, one-shot speed tests, a live bandwidth mo
 > your system `go` or needs root.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Foxemsx/riptide/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/parzij/riptide/main/install.sh | sh
 riptide
 ```
 
 Uninstall:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Foxemsx/riptide/main/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/parzij/riptide/main/uninstall.sh | sh
 ```
 
 On macOS the same `curl | sh` commands work (the script detects Darwin).
@@ -115,18 +130,18 @@ You can also open **Settings → Uninstall** inside the app for the same instruc
 The bash installer does **not** run on Windows. Pick one of:
 
 - **Prebuilt release** — download `riptide.exe` from the
-  [Releases](https://github.com/Foxemsx/riptide/releases) page and run it.
+  [Releases](https://github.com/parzij/riptide/releases) page and run it.
 - **With Go 1.23+** (no release needed):
 
   ```sh
-  go install github.com/Foxemsx/riptide/cmd/riptide@main
+  go install github.com/parzij/riptide/cmd/riptide@main
   riptide
   ```
 
 ### From source (any OS with Go 1.23+)
 
 ```sh
-git clone https://github.com/Foxemsx/riptide
+git clone https://github.com/parzij/riptide
 cd riptide
 go build -o riptide ./cmd/riptide    # Windows: go build -o riptide.exe ./cmd/riptide
 ./riptide
@@ -234,7 +249,7 @@ Speed tests are stored in **SQLite** as `riptide.db`:
 **Linux / macOS**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Foxemsx/riptide/main/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/parzij/riptide/main/uninstall.sh | sh
 ```
 
 **Manual**
@@ -254,3 +269,5 @@ Uninstall removes the binary only — not Go, not your PATH entries, and not `ri
 ## License
 
 [MIT](LICENSE) — free to use, modify, and redistribute with the license notice.
+See [third-party notices](THIRD_PARTY_NOTICES.md) for bundled dependencies
+added by this variant.

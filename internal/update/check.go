@@ -12,10 +12,10 @@ import (
 
 const (
 	// RepoURL is the public project page.
-	RepoURL = "https://github.com/Foxemsx/riptide"
+	RepoURL = "https://github.com/parzij/riptide"
 	// ReleasesURL is the releases list page.
-	ReleasesURL = "https://github.com/Foxemsx/riptide/releases"
-	apiLatest   = "https://api.github.com/repos/Foxemsx/riptide/releases/latest"
+	ReleasesURL = "https://github.com/parzij/riptide/releases"
+	apiLatest   = "https://api.github.com/repos/parzij/riptide/releases/latest"
 )
 
 // Result is the outcome of a non-blocking update check.
